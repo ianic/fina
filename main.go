@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // XML structures
@@ -17,10 +18,12 @@ type Invoice struct {
 	XMLName       xml.Name `xml:"Invoice"`
 	ID            string   `xml:"ID"`
 	IssueDate     string   `xml:"IssueDate"`
+	IssueTime     string   `xml:"IssueTime"`
+	DueDate       string   `xml:"DueDate"`
 	Reference     string   `xml:"DespatchDocumentReference>ID"`
 	ReferenceName string   `xml:"AdditionalDocumentReference>ID"`
 
-	Suplier  Customer `xml:"AccountingSupplierParty>Party"`
+	Supplier Customer `xml:"AccountingSupplierParty>Party"`
 	Customer Customer `xml:"AccountingCustomerParty>Party"`
 
 	LineExtension string `xml:"LegalMonetaryTotal>LineExtensionAmount"`
@@ -62,33 +65,46 @@ type InvoiceLine struct {
 	TaxScheme  string `xml:"Item>ClassifiedTaxCategory>TaxScheme>ID"` // sifra kategorije pdv-a
 }
 
-func main() {
-	//parse("48-prociscen.xml")
+const path = "./txt/"
 
-	files := []string{"invoices.txt", "customers.txt", "lines.txt"}
+func main() {
+	files := []string{"invoices.txt", "customers.txt", "invoice_lines.txt"}
 	for _, file := range files {
-		if err := os.Remove(file); err != nil {
+		if err := os.Remove(path + file); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("Error removing %s: %v\n", file, err)
 		}
 	}
 
-	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+	var invoices []Invoice
+	de_dup_id := make(map[string]struct{})
+
+	err := filepath.Walk("./xml/", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		// Check if file and has .xml extension
 		if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".xml" {
-			fmt.Printf("processing: %s\n", path)
-			parse(path)
+			invoice := parse(path)
+			fmt.Printf("processing: %s ", path)
+
+			if _, ok := de_dup_id[invoice.ID]; ok {
+				fmt.Printf("skipping duplicate invoice id: %s", invoice.ID)
+			} else {
+				invoices = append(invoices, invoice)
+				de_dup_id[invoice.ID] = struct{}{}
+			}
+			fmt.Printf("\n")
 		}
 		return nil
 	})
 	if err != nil {
 		log.Fatalf("filepath: %v", err)
 	}
+
+	writeFiles(invoices)
 }
 
-func parse(xmlFile string) {
+func parse(xmlFile string) Invoice {
 	// Read XML file
 	data, err := os.ReadFile(xmlFile)
 	if err != nil {
@@ -102,24 +118,29 @@ func parse(xmlFile string) {
 		log.Fatalf("Error parsing XML: %v", err)
 	}
 
-	err = writeInvoiceCSV("invoices.txt", &invoice)
+	return invoice
+}
+
+func writeFiles(invoices []Invoice) {
+
+	var err = writeInvoice("invoices.txt", invoices)
 	if err != nil {
 		log.Fatalf("Error writing invoice CSV: %v", err)
 	}
 
-	err = writeCustomer("customers.txt", &invoice)
+	err = writeCustomer("customers.txt", invoices)
 	if err != nil {
 		log.Fatalf("Error writing customer CSV: %v", err)
 	}
 
-	err = writeInvoiceLinesCSV("lines.txt", &invoice)
+	err = writeInvoiceLines("invoice_lines.txt", invoices)
 	if err != nil {
 		log.Fatalf("Error writing lines CSV: %v", err)
 	}
 }
 
-func writeInvoiceCSV(filename string, invoice *Invoice) error {
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+func writeInvoice(filename string, invoices []Invoice) error {
+	file, err := os.OpenFile(path+filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -136,29 +157,40 @@ func writeInvoiceCSV(filename string, invoice *Invoice) error {
 	defer writer.Flush()
 
 	// Header
-	header := []string{"ID", "Reference", "ReferenceName", "IssueDate", "LineExtension", "TaxExclusive", "TaxInclusive", "Tax", "Payable"}
+	header := []string{"ID", "IssueDate", "DueDate", "Supplier", "Customer",
+		"Reference", "ReferenceName",
+		"LineExtension", "TaxExclusive", "TaxInclusive", "Tax", "Payable"}
 	if err := writer.Write(header); err != nil {
 		return err
 	}
 
-	// Invoice row
-	row := []string{
-		invoice.ID,
-		invoice.Reference,
-		invoice.ReferenceName,
-		invoice.IssueDate,
+	for _, invoice := range invoices {
+		// Invoice row
+		row := []string{
+			invoice.ID,
+			formatDate(invoice.IssueDate + " " + invoice.IssueTime),
+			formatDate(invoice.DueDate),
+			invoice.Supplier.ID,
+			invoice.Customer.ID,
 
-		invoice.LineExtension,
-		invoice.TaxExclusive,
-		invoice.TaxInclusive,
-		invoice.Tax,
-		invoice.Payable,
+			invoice.Reference,
+			invoice.ReferenceName,
+
+			invoice.LineExtension,
+			invoice.TaxExclusive,
+			invoice.TaxInclusive,
+			invoice.Tax,
+			invoice.Payable,
+		}
+		if err := writer.Write(row); err != nil {
+			return err
+		}
 	}
-	return writer.Write(row)
+	return nil
 }
 
-func writeInvoiceLinesCSV(filename string, invoice *Invoice) error {
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+func writeInvoiceLines(filename string, invoices []Invoice) error {
+	file, err := os.OpenFile(path+filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -179,33 +211,34 @@ func writeInvoiceLinesCSV(filename string, invoice *Invoice) error {
 		return err
 	}
 
-	// Invoice lines
-	for _, line := range invoice.Lines {
-		row := []string{
-			invoice.ID,
-			line.ID,
+	for _, invoice := range invoices {
+		// Invoice lines
+		for _, line := range invoice.Lines {
+			row := []string{
+				invoice.ID,
+				line.ID,
 
-			line.ItemName,
-			line.ItemID,
+				line.ItemName,
+				line.ItemID,
 
-			formatNumber(line.Quantity),
-			formatNumber(line.UnitPrice),
-			formatNumber(line.Amount),
+				formatNumber(line.Quantity),
+				formatNumber(line.UnitPrice),
+				formatNumber(line.Amount),
 
-			formatNumber(line.TaxPercent),
-			line.TaxID + "-" + line.TaxScheme,
-		}
-		if err := writer.Write(row); err != nil {
-			return err
+				formatNumber(line.TaxPercent),
+				line.TaxID + "-" + line.TaxScheme,
+			}
+			if err := writer.Write(row); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
 }
 
-func writeCustomer(filename string, invoice *Invoice) error {
-	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
-
+func writeCustomer(filename string, invoices []Invoice) error {
+	file, err := os.OpenFile(path+filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -226,26 +259,41 @@ func writeCustomer(filename string, invoice *Invoice) error {
 		return err
 	}
 
-	for _, customer := range []Customer{invoice.Suplier, invoice.Customer} {
-		row := []string{
-			customer.ID,
-			customer.Name,
-			customer.OIB,
+	for _, invoice := range invoices {
+		for _, customer := range []Customer{invoice.Supplier, invoice.Customer} {
+			row := []string{
+				customer.ID,
+				customer.Name,
+				customer.OIB,
 
-			customer.Street,
-			customer.City,
-			customer.PostalZone,
-			customer.Country,
+				customer.Street,
+				customer.City,
+				customer.PostalZone,
+				customer.Country,
 
-			customer.Contact,
-			customer.Email,
-		}
-		if err := writer.Write(row); err != nil {
-			return err
+				customer.Contact,
+				customer.Email,
+			}
+			if err := writer.Write(row); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
+}
+
+func formatDate(input string) string {
+	// Format: YYYY-MM-DD HH:MM:SS
+	t, err := time.Parse("2006-01-02 15:04:05", input)
+	if err != nil {
+		t, err = time.Parse("2006-01-02", input)
+		if err != nil {
+			fmt.Println("Error parsing date:", err)
+			return ""
+		}
+	}
+	return t.Format("02.01.2006 15:04:05")
 }
 
 func formatNumber(num string) string {
