@@ -68,7 +68,7 @@ type InvoiceLine struct {
 const path = "./txt/"
 
 func main() {
-	files := []string{"invoices.txt", "customers.txt", "invoice_lines.txt"}
+	files := []string{"invoices.txt", "customer.txt", "lines.txt"}
 	for _, file := range files {
 		if err := os.Remove(path + file); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("Error removing %s: %v\n", file, err)
@@ -128,12 +128,12 @@ func writeFiles(invoices []Invoice) {
 		log.Fatalf("Error writing invoice CSV: %v", err)
 	}
 
-	err = writeCustomer("customers.txt", invoices)
+	err = writeCustomer("customer.txt", invoices)
 	if err != nil {
 		log.Fatalf("Error writing customer CSV: %v", err)
 	}
 
-	err = writeInvoiceLines("invoice_lines.txt", invoices)
+	err = writeInvoiceLines("lines.txt", invoices)
 	if err != nil {
 		log.Fatalf("Error writing lines CSV: %v", err)
 	}
@@ -259,8 +259,15 @@ func writeCustomer(filename string, invoices []Invoice) error {
 		return err
 	}
 
+	de_dup_id := make(map[string]struct{})
+
 	for _, invoice := range invoices {
 		for _, customer := range []Customer{invoice.Supplier, invoice.Customer} {
+			if _, ok := de_dup_id[customer.ID]; ok {
+				continue
+			} else {
+				de_dup_id[customer.ID] = struct{}{}
+			}
 			row := []string{
 				customer.ID,
 				customer.Name,
