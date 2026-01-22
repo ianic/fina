@@ -33,6 +33,8 @@ type Invoice struct {
 	Tax           string `xml:"TaxTotal>TaxAmount"`
 
 	Lines []InvoiceLine `xml:"InvoiceLine"`
+
+	Broj string
 }
 
 type Customer struct {
@@ -66,6 +68,8 @@ type InvoiceLine struct {
 }
 
 const path = "./txt/"
+const ura_path = "./xml/ura.csv"
+const zebra_oib = "37617049457"
 
 func main() {
 	files := []string{"invoices.txt", "customer.txt", "lines.txt"}
@@ -78,22 +82,40 @@ func main() {
 	var invoices []Invoice
 	de_dup_id := make(map[string]struct{})
 
-	err := filepath.Walk("./xml/", func(path string, info os.FileInfo, err error) error {
+	ura, err := readUra(ura_path)
+	if err != nil {
+		log.Fatalf("read ura error: %v", err)
+	}
+
+	err = filepath.Walk("./xml/", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		// Check if file and has .xml extension
 		if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".xml" {
 			invoice := parse(path)
-			fmt.Printf("processing: %s ", path)
+			fmt.Printf("%-20s ", path)
+			defer fmt.Printf("\n")
+			key := invoice.ID + "-" + invoice.Supplier.ID
 
-			if _, ok := de_dup_id[invoice.ID]; ok {
-				fmt.Printf("skipping duplicate invoice id: %s", invoice.ID)
+			if _, ok := de_dup_id[key]; ok {
+				fmt.Printf("preskacem duplikat ID: %s OIB: %s", invoice.ID, invoice.Supplier.ID)
+				return nil
 			} else {
+
+				if invoice.Customer.ID == zebra_oib {
+					broj, broj_ok := ura[key]
+					if !broj_ok {
+						fmt.Printf("preskacem nema broja racuna %s !!!", key)
+						return nil
+					}
+					invoice.Broj = broj
+				}
+				fmt.Printf("OK")
 				invoices = append(invoices, invoice)
-				de_dup_id[invoice.ID] = struct{}{}
+				de_dup_id[key] = struct{}{}
 			}
-			fmt.Printf("\n")
+
 		}
 		return nil
 	})
@@ -159,7 +181,9 @@ func writeInvoice(filename string, invoices []Invoice) error {
 	// Header
 	header := []string{"ID", "IssueDate", "DueDate", "Supplier", "Customer",
 		"Reference", "ReferenceName",
-		"LineExtension", "TaxExclusive", "TaxInclusive", "Tax", "Payable"}
+		"LineExtension", "TaxExclusive", "TaxInclusive", "Tax", "Payable",
+		"Broj",
+	}
 	if err := writer.Write(header); err != nil {
 		return err
 	}
@@ -181,6 +205,8 @@ func writeInvoice(filename string, invoices []Invoice) error {
 			invoice.TaxInclusive,
 			invoice.Tax,
 			invoice.Payable,
+
+			invoice.Broj,
 		}
 		if err := writer.Write(row); err != nil {
 			return err
@@ -305,4 +331,38 @@ func formatDate(input string) string {
 
 func formatNumber(num string) string {
 	return strings.ReplaceAll(num, ".", ",")
+}
+
+func readUra(filename string) (map[string]string, error) {
+	// 1. Open the file
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	// 2. Initialize the CSV reader
+	reader := csv.NewReader(f)
+
+	// 3. Read all records
+	// records is a [][]string (2D slice of strings)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	ura := make(map[string]string)
+	// 4. Map records to structs
+	for i, row := range records {
+		if i == 0 { // Skip header row if present
+			continue
+		}
+		id := row[2]
+		supplierID := row[7]
+		broj := row[1]
+		key := id + "-" + supplierID
+		ura[key] = broj
+	}
+
+	return ura, nil
 }
