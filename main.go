@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/transform"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -419,8 +420,18 @@ func readUra(filename string) (map[string]string, error) {
 	}
 	defer f.Close()
 
+	// Detect delimiter from first lines
+	delim := detectDelimiter(f)
+	fmt.Printf("Detected delimiter: '%c'\n", delim)
+
+	// Rewind file
+	if _, err := f.Seek(0, 0); err != nil {
+		return nil, err
+	}
+
 	// 2. Initialize the CSV reader
 	reader := csv.NewReader(f)
+	reader.Comma = delim
 
 	// 3. Read all records
 	// records is a [][]string (2D slice of strings)
@@ -445,4 +456,28 @@ func readUra(filename string) (map[string]string, error) {
 	}
 
 	return ura, nil
+}
+
+func detectDelimiter(r io.Reader) rune {
+	// Read first few lines for analysis
+	buf := make([]byte, 1024)
+	n, _ := r.Read(buf)
+	data := string(buf[:n])
+
+	lines := strings.SplitN(data, "\n", 3) // First 3 lines max
+
+	commaCount, semicolonCount := 0, 0
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		commaCount += strings.Count(line, ",")
+		semicolonCount += strings.Count(line, ";")
+	}
+
+	if semicolonCount > commaCount {
+		return ';'
+	}
+	return ','
 }
