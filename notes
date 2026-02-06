@@ -1,0 +1,10 @@
+
+	
+
+	
+sudo mkdir -p /mnt/baze                                           
+sudo mount -t cifs //192.168.122.82/baze /mnt/baze -o username=ianic,password=ianic,vers=1.0,iocharset=utf8,uid=1000,gid=1000
+
+
+go build && ./fina --input ~/Downloads/wetransfer_poslani_2026-02-06_1605/Primljeni --input ~/Downloads/wetransfer_poslani_2026-02-06_1605/Poslani --ura ~/Downloads/wetransfer_poslani_2026-02-06_1605/Obrazac_URA-2.csv  | grep nije
+	

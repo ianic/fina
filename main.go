@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/xml"
+	"flag"
 	"fmt"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/transform"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // XML structures
@@ -58,23 +61,57 @@ type InvoiceLine struct {
 	ItemName string `xml:"Item>Name"` // naziv artikla
 	ItemID   string `xml:"Item>SellersItemIdentification>ID"`
 
-	Quantity  string `xml:"InvoicedQuantity"`    // kolicina
-	UnitPrice string `xml:"Price>PriceAmount"`   // neto cijena
-	Amount    string `xml:"LineExtensionAmount"` // neto iznos
+	Quantity  Quantity `xml:"InvoicedQuantity"`    // kolicina
+	UnitPrice string   `xml:"Price>PriceAmount"`   // neto cijena
+	Amount    string   `xml:"LineExtensionAmount"` // neto iznos
 
 	TaxPercent string `xml:"Item>ClassifiedTaxCategory>Percent"`      // pdv
 	TaxID      string `xml:"Item>ClassifiedTaxCategory>ID"`           // sifra kategorije pdv-a
 	TaxScheme  string `xml:"Item>ClassifiedTaxCategory>TaxScheme>ID"` // sifra kategorije pdv-a
 }
 
-const path = "./txt/"
-const ura_path = "./xml/ura.csv"
+type Quantity struct {
+	Value    string `xml:",chardata"`     // The number (5)
+	UnitCode string `xml:"unitCode,attr"` // The attribute
+}
+
+// var xml_paths = [2]string{
+// 	"/home/ianic/Downloads/wetransfer_poslani_2026-02-06_1605/Primljeni/",
+// 	"/home/ianic/Downloads/wetransfer_poslani_2026-02-06_1605/Poslani/",
+// }
+
+var output = "./output"
+
+// const ura_path = "/home/ianic/Downloads/wetransfer_poslani_2026-02-06_1605/Obrazac_URA-2.csv"
 const zebra_oib = "37617049457"
 
+type stringSlice []string
+
+func (s *stringSlice) String() string {
+	return fmt.Sprintf("%v", *s) // For -h usage
+}
+
+func (s *stringSlice) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 func main() {
+	var input []string
+	flag.Var((*stringSlice)(&input), "input", "input folder")
+	var ura_path = flag.String("ura", "Obrazac_URA-2.csv", "obrazac ura path")
+	var outputFlag = flag.String("output", output, "output folder")
+	flag.Parse()
+	output = *outputFlag
+
+	err := os.MkdirAll(output, 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	files := []string{"invoices.txt", "customer.txt", "lines.txt"}
 	for _, file := range files {
-		if err := os.Remove(path + file); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(filepath.Join(output, file)); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("Error removing %s: %v\n", file, err)
 		}
 	}
@@ -82,45 +119,47 @@ func main() {
 	var invoices []Invoice
 	de_dup_id := make(map[string]struct{})
 
-	ura, err := readUra(ura_path)
+	ura, err := readUra(*ura_path)
 	if err != nil {
 		log.Fatalf("read ura error: %v", err)
 	}
 
-	err = filepath.Walk("./xml/", func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		// Check if file and has .xml extension
-		if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".xml" {
-			invoice := parse(path)
-			fmt.Printf("%-20s ", path)
-			defer fmt.Printf("\n")
-			key := invoice.ID + "-" + invoice.Supplier.ID
-
-			if _, ok := de_dup_id[key]; ok {
-				fmt.Printf("preskacem duplikat ID: %s OIB: %s", invoice.ID, invoice.Supplier.ID)
-				return nil
-			} else {
-
-				if invoice.Customer.ID == zebra_oib {
-					broj, broj_ok := ura[key]
-					if !broj_ok {
-						fmt.Printf("preskacem nema broja racuna %s !!!", key)
-						return nil
-					}
-					invoice.Broj = broj
-				}
-				fmt.Printf("OK")
-				invoices = append(invoices, invoice)
-				de_dup_id[key] = struct{}{}
+	for _, path := range input {
+		err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
 			}
+			// Check if file and has .xml extension
+			if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".xml" {
+				invoice := parse(path)
+				fmt.Printf("%-20s ", path)
+				defer fmt.Printf("\n")
+				key := invoice.ID + "-" + invoice.Supplier.ID
 
+				if _, ok := de_dup_id[key]; ok {
+					fmt.Printf("preskacem duplikat ID: %s OIB: %s", invoice.ID, invoice.Supplier.ID)
+					return nil
+				} else {
+
+					if invoice.Customer.ID == zebra_oib {
+						broj, broj_ok := ura[key]
+						if !broj_ok {
+							fmt.Printf("preskacem nema broja racuna %s !!!", key)
+							return nil
+						}
+						invoice.Broj = broj
+					}
+					fmt.Printf("OK")
+					invoices = append(invoices, invoice)
+					de_dup_id[key] = struct{}{}
+				}
+
+			}
+			return nil
+		})
+		if err != nil {
+			log.Fatalf("filepath: %v", err)
 		}
-		return nil
-	})
-	if err != nil {
-		log.Fatalf("filepath: %v", err)
 	}
 
 	writeFiles(invoices)
@@ -144,8 +183,7 @@ func parse(xmlFile string) Invoice {
 }
 
 func writeFiles(invoices []Invoice) {
-
-	var err = writeInvoice("invoices.txt", invoices)
+	err := writeInvoice("invoices.txt", invoices)
 	if err != nil {
 		log.Fatalf("Error writing invoice CSV: %v", err)
 	}
@@ -162,7 +200,7 @@ func writeFiles(invoices []Invoice) {
 }
 
 func writeInvoice(filename string, invoices []Invoice) error {
-	file, err := os.OpenFile(path+filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	file, err := os.OpenFile(filepath.Join(output, filename), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -216,7 +254,7 @@ func writeInvoice(filename string, invoices []Invoice) error {
 }
 
 func writeInvoiceLines(filename string, invoices []Invoice) error {
-	file, err := os.OpenFile(path+filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	file, err := os.OpenFile(filepath.Join(output, filename), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -232,14 +270,22 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 	defer writer.Flush()
 
 	// Header
-	header := []string{"InvoiceID", "ID", "ItemName", "ItemID", "Quantity", "UnitPrice", "Amount", "TaxPercent", "TaxScheme"}
+	header := []string{"InvoiceID", "ID",
+		"ItemName", "ItemID",
+		"Quantity", "UnitPrice", "Amount", "Unit",
+		"TaxPercent", "TaxScheme"}
 	if err := writer.Write(header); err != nil {
 		return err
 	}
 
 	for _, invoice := range invoices {
 		// Invoice lines
+
 		for _, line := range invoice.Lines {
+			unit, ok := unitCodes[line.Quantity.UnitCode]
+			if !ok {
+				unit = line.Quantity.UnitCode
+			}
 			row := []string{
 				invoice.ID,
 				line.ID,
@@ -247,9 +293,10 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 				line.ItemName,
 				line.ItemID,
 
-				formatNumber(line.Quantity),
+				formatNumber(line.Quantity.Value),
 				formatNumber(line.UnitPrice),
 				formatNumber(line.Amount),
+				unit,
 
 				formatNumber(line.TaxPercent),
 				line.TaxID + "-" + line.TaxScheme,
@@ -263,8 +310,18 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 	return nil
 }
 
+var unitCodes = map[string]string{
+	"H87": "kom",
+	"PCE": "kom",
+	"KGM": "kg",
+	"MTR": "m",
+	"LTR": "l",
+	"HUR": "sat",
+	"DAY": "dan",
+}
+
 func writeCustomer(filename string, invoices []Invoice) error {
-	file, err := os.OpenFile(path+filename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	file, err := os.OpenFile(filepath.Join(output, filename), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -299,8 +356,8 @@ func writeCustomer(filename string, invoices []Invoice) error {
 				customer.Name,
 				customer.OIB,
 
-				customer.Street,
-				customer.City,
+				fixRune(customer.Street),
+				fixRune(customer.City),
 				customer.PostalZone,
 				customer.Country,
 
@@ -315,6 +372,27 @@ func writeCustomer(filename string, invoices []Invoice) error {
 
 	return nil
 }
+
+func fixRune(s string) string {
+	var buf bytes.Buffer
+	last_unknown := false
+	for _, r := range s {
+		if r <= unicode.MaxASCII { //|| utf8.ValidRune(r) {
+			buf.WriteRune(r)
+			last_unknown = false
+		} else {
+			if last_unknown {
+				buf.WriteRune('?')
+			}
+			last_unknown = true
+		}
+	}
+	return buf.String()
+}
+
+// func fixRune(field string) string {
+// 	return string([]byte(field))
+// }
 
 func formatDate(input string) string {
 	// Format: YYYY-MM-DD HH:MM:SS
@@ -362,6 +440,8 @@ func readUra(filename string) (map[string]string, error) {
 		broj := row[1]
 		key := id + "-" + supplierID
 		ura[key] = broj
+
+		fmt.Printf("ura: %-7s %-25s %s\n", broj, id, supplierID)
 	}
 
 	return ura, nil
