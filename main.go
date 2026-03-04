@@ -6,8 +6,6 @@ import (
 	"encoding/xml"
 	"flag"
 	"fmt"
-	"golang.org/x/text/encoding/charmap"
-	"golang.org/x/text/transform"
 	"io"
 	"log"
 	"os"
@@ -15,6 +13,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/transform"
 )
 
 // XML structures
@@ -354,7 +355,7 @@ func writeCustomer(filename string, invoices []Invoice) error {
 			}
 			row := []string{
 				customer.ID,
-				customer.Name,
+				fixRune(customer.Name),
 				customer.OIB,
 
 				fixRune(customer.Street),
@@ -374,20 +375,104 @@ func writeCustomer(filename string, invoices []Invoice) error {
 	return nil
 }
 
+/*
+Char | Win-1250 | UTF-8 bytes
+-----+----------+-----------
+Č    | 0x8A     | C8 80
+č    | 0x9A     | C4 8D
+Ć    | 0x8C     | C4 86
+ć    | 0x9C     | C4 87  ← your Ä‡
+Đ    | 0x8D     | C4 90
+đ    | 0x9D     | C4 91
+Š    | 0xA6     | C5 A0
+š    | 0xB6     | C5 A1
+Ž    | 0x8E     | C5 BD
+ž    | 0x9E     | C5 BE
+
+Č  → 8A (capital C-háček)
+č  → 9A (small c-háček)
+Ć  → 8C (capital C-acute)
+ć  → 9C (small c-acute)
+Đ  → 8D (capital D-stroke)
+đ  → 9D (small d-stroke)
+Š  → A6 (capital S-háček)
+š  → B6 (small s-háček)
+Ž  → 8E (capital Z-háček)
+ž  → 9E (small z-háček)
+*/
+
 func fixRune(s string) string {
 	var buf bytes.Buffer
-	last_unknown := false
+	var last rune = 0
+	//fixed := false
 	for _, r := range s {
 		if r <= unicode.MaxASCII { //|| utf8.ValidRune(r) {
 			buf.WriteRune(r)
-			last_unknown = false
+			last = 0
 		} else {
-			if last_unknown {
-				buf.WriteRune('?')
+			if last == 0 {
+				last = r
+			} else {
+				switch last {
+				case 0xc4:
+					{
+						switch r {
+						case 0x15a:
+							//buf.WriteRune(0x8A) // Č
+							//buf.WriteRune(0xc880) // Č
+							buf.WriteRune('Č')
+						case 0x164:
+							//buf.WriteRune(0x9A) // č    | 0x9A
+							buf.WriteRune('č')
+							//buf.WriteRune(0xc48d)
+						case 0x90:
+							buf.WriteRune('Đ')
+						case 0x2018:
+							//buf.WriteRune(0x9D) // đ    | 0x9D
+							//buf.WriteRune(0xc491) // đ    | 0x9D
+							buf.WriteRune('đ')
+						case 0x2020:
+							//buf.WriteRune(0x8C) // Ć
+							//buf.WriteRune(0xc486) // Ć
+							buf.WriteRune('Ć')
+						case 0x2021:
+							//buf.WriteRune(0x9C) // ć    | 0x9C
+							//buf.WriteRune(0xc487) // ć    | 0x9C
+							buf.WriteRune('ć')
+						default:
+							buf.WriteRune('?')
+						}
+					}
+				case 0x139:
+					{
+						switch r {
+						case 0x13e:
+							//buf.WriteRune(0x9E) // ž    | 0x9E
+							buf.WriteRune('ž')
+						case 0x2dd:
+							//buf.WriteRune(0x8E) // Ž    | 0x8E
+							buf.WriteRune('Ž')
+						case 0xa0:
+							//buf.WriteRune(0xA6) // Š    | 0xA6
+							buf.WriteRune('Š')
+						case 0x2c7:
+							//buf.WriteRune(0xB6) // š    | 0xB6
+							buf.WriteRune('š')
+						default:
+							buf.WriteRune('?')
+						}
+					}
+				default:
+					buf.WriteRune('?')
+				}
+				last = 0
 			}
-			last_unknown = true
+			//fixed = true
 		}
 	}
+	// if fixed {
+	// 	fmt.Printf("fixing rune %s to %s\n", s, buf.String())
+	// }
 	return buf.String()
 }
 
@@ -422,7 +507,7 @@ func readUra(filename string) (map[string]string, error) {
 
 	// Detect delimiter from first lines
 	delim := detectDelimiter(f)
-	fmt.Printf("Detected delimiter: '%c'\n", delim)
+	//fmt.Printf("Detected delimiter: '%c'\n", delim)
 
 	// Rewind file
 	if _, err := f.Seek(0, 0); err != nil {
