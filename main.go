@@ -101,7 +101,7 @@ func (s *stringSlice) Set(value string) error {
 func main() {
 	var input []string
 	flag.Var((*stringSlice)(&input), "input", "input folder")
-	var ura_path = flag.String("ura", "Obrazac_URA-2.csv", "obrazac ura path")
+	var ura_path = flag.String("ura", "", "obrazac ura path")
 	var outputFlag = flag.String("output", output, "output folder")
 	flag.Parse()
 	output = *outputFlag
@@ -121,11 +121,34 @@ func main() {
 	var invoices []Invoice
 	de_dup_id := make(map[string]struct{})
 
-	ura, err := readUra(*ura_path)
-	if err != nil {
-		log.Fatalf("read ura error: %v", err)
+	if *ura_path == "" {
+		for _, path := range input {
+			err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".csv" {
+					*ura_path = path
+				}
+				return nil
+			})
+			if err != nil {
+				log.Fatalf("filepath: %v", err)
+			}
+		}
 	}
 
+	if *ura_path == "" {
+		log.Fatalf("missing ura path")
+	}
+
+	ura, err := readUra(*ura_path)
+	if err != nil {
+		log.Fatalf("read ura %s error: %v", *ura_path, err)
+	}
+
+	files_count := 0
+	skip_count := 0
 	for _, path := range input {
 		err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -133,26 +156,29 @@ func main() {
 			}
 			// Check if file and has .xml extension
 			if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".xml" {
+				filename := filepath.Base(path)
 				invoice := parse(path)
-				fmt.Printf("%-20s ", path)
-				defer fmt.Printf("\n")
+				//fmt.Printf("%-20s ", path)
+				//defer fmt.Printf("\n")
 				key := invoice.ID + "-" + invoice.Supplier.ID
 
 				if _, ok := de_dup_id[key]; ok {
-					fmt.Printf("preskacem duplikat ID: %s OIB: %s", invoice.ID, invoice.Supplier.ID)
+					fmt.Printf("preskacem %s duplikat ID: %s OIB: %s\n", filename, invoice.ID, invoice.Supplier.ID)
 					return nil
 				} else {
 
 					if invoice.Customer.ID == zebra_oib {
 						broj, broj_ok := ura[key]
 						if !broj_ok {
-							fmt.Printf("preskacem nema broja racuna %s !!!", key)
+							fmt.Printf("preskacem %-70s nema broja racuna %s\n", filename, key)
+							skip_count += 1
 							return nil
 						}
 						invoice.Broj = broj
 					}
-					fmt.Printf("OK")
+					//fmt.Printf("OK")
 					invoices = append(invoices, invoice)
+					files_count += 1
 					de_dup_id[key] = struct{}{}
 				}
 
@@ -165,6 +191,7 @@ func main() {
 	}
 
 	writeFiles(invoices)
+	fmt.Printf("pronasao %d datoteka, preskocio %d\n", files_count, skip_count)
 }
 
 func parse(xmlFile string) Invoice {
@@ -381,24 +408,13 @@ Char | Win-1250 | UTF-8 bytes
 Č    | 0x8A     | C8 80
 č    | 0x9A     | C4 8D
 Ć    | 0x8C     | C4 86
-ć    | 0x9C     | C4 87  ← your Ä‡
+ć    | 0x9C     | C4 87
 Đ    | 0x8D     | C4 90
 đ    | 0x9D     | C4 91
 Š    | 0xA6     | C5 A0
 š    | 0xB6     | C5 A1
 Ž    | 0x8E     | C5 BD
 ž    | 0x9E     | C5 BE
-
-Č  → 8A (capital C-háček)
-č  → 9A (small c-háček)
-Ć  → 8C (capital C-acute)
-ć  → 9C (small c-acute)
-Đ  → 8D (capital D-stroke)
-đ  → 9D (small d-stroke)
-Š  → A6 (capital S-háček)
-š  → B6 (small s-háček)
-Ž  → 8E (capital Z-háček)
-ž  → 9E (small z-háček)
 */
 
 func fixRune(s string) string {
@@ -406,7 +422,7 @@ func fixRune(s string) string {
 	var last rune = 0
 	//fixed := false
 	for _, r := range s {
-		if r <= unicode.MaxASCII { //|| utf8.ValidRune(r) {
+		if r <= unicode.MaxASCII {
 			buf.WriteRune(r)
 			last = 0
 		} else {
@@ -418,26 +434,16 @@ func fixRune(s string) string {
 					{
 						switch r {
 						case 0x15a:
-							//buf.WriteRune(0x8A) // Č
-							//buf.WriteRune(0xc880) // Č
 							buf.WriteRune('Č')
 						case 0x164:
-							//buf.WriteRune(0x9A) // č    | 0x9A
 							buf.WriteRune('č')
-							//buf.WriteRune(0xc48d)
 						case 0x90:
 							buf.WriteRune('Đ')
 						case 0x2018:
-							//buf.WriteRune(0x9D) // đ    | 0x9D
-							//buf.WriteRune(0xc491) // đ    | 0x9D
 							buf.WriteRune('đ')
 						case 0x2020:
-							//buf.WriteRune(0x8C) // Ć
-							//buf.WriteRune(0xc486) // Ć
 							buf.WriteRune('Ć')
 						case 0x2021:
-							//buf.WriteRune(0x9C) // ć    | 0x9C
-							//buf.WriteRune(0xc487) // ć    | 0x9C
 							buf.WriteRune('ć')
 						default:
 							buf.WriteRune('?')
@@ -447,16 +453,12 @@ func fixRune(s string) string {
 					{
 						switch r {
 						case 0x13e:
-							//buf.WriteRune(0x9E) // ž    | 0x9E
 							buf.WriteRune('ž')
 						case 0x2dd:
-							//buf.WriteRune(0x8E) // Ž    | 0x8E
 							buf.WriteRune('Ž')
 						case 0xa0:
-							//buf.WriteRune(0xA6) // Š    | 0xA6
 							buf.WriteRune('Š')
 						case 0x2c7:
-							//buf.WriteRune(0xB6) // š    | 0xB6
 							buf.WriteRune('š')
 						default:
 							buf.WriteRune('?')
@@ -475,10 +477,6 @@ func fixRune(s string) string {
 	// }
 	return buf.String()
 }
-
-// func fixRune(field string) string {
-// 	return string([]byte(field))
-// }
 
 func formatDate(input string) string {
 	// Format: YYYY-MM-DD HH:MM:SS
@@ -537,7 +535,7 @@ func readUra(filename string) (map[string]string, error) {
 		key := id + "-" + supplierID
 		ura[key] = broj
 
-		fmt.Printf("ura: %-7s %-25s %s\n", broj, id, supplierID)
+		//fmt.Printf("ura: %-7s %-25s %s\n", broj, id, supplierID)
 	}
 
 	return ura, nil
