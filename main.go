@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/shakinm/xlsReader/xls"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/transform"
 )
@@ -127,7 +128,8 @@ func main() {
 				if err != nil {
 					return err
 				}
-				if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".csv" {
+				ext := strings.ToLower(filepath.Ext(path))
+				if !info.IsDir() && (ext == ".csv" || ext == ".xls") {
 					*ura_path = path
 				}
 				return nil
@@ -496,37 +498,35 @@ func formatNumber(num string) string {
 }
 
 func readUra(filename string) (map[string]string, error) {
-	// 1. Open the file
+	if strings.ToLower(filepath.Ext(filename)) == ".xls" {
+		return readUraXls(filename)
+	}
+	return readUraCsv(filename)
+}
+
+func readUraCsv(filename string) (map[string]string, error) {
 	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	// Detect delimiter from first lines
 	delim := detectDelimiter(f)
-	//fmt.Printf("Detected delimiter: '%c'\n", delim)
-
-	// Rewind file
 	if _, err := f.Seek(0, 0); err != nil {
 		return nil, err
 	}
 
-	// 2. Initialize the CSV reader
 	reader := csv.NewReader(f)
 	reader.Comma = delim
 
-	// 3. Read all records
-	// records is a [][]string (2D slice of strings)
 	records, err := reader.ReadAll()
 	if err != nil {
 		return nil, err
 	}
 
 	ura := make(map[string]string)
-	// 4. Map records to structs
 	for i, row := range records {
-		if i == 0 { // Skip header row if present
+		if i == 0 {
 			continue
 		}
 		id := row[2]
@@ -534,8 +534,43 @@ func readUra(filename string) (map[string]string, error) {
 		broj := row[1]
 		key := id + "-" + supplierID
 		ura[key] = broj
+	}
 
-		//fmt.Printf("ura: %-7s %-25s %s\n", broj, id, supplierID)
+	return ura, nil
+}
+
+func readUraXls(filename string) (map[string]string, error) {
+	wb, err := xls.OpenFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("open xls: %w", err)
+	}
+
+	sheet, err := wb.GetSheet(0)
+	if err != nil {
+		return nil, fmt.Errorf("xls get sheet: %w", err)
+	}
+
+	ura := make(map[string]string)
+	for i := 1; i < sheet.GetNumberRows(); i++ {
+		row, err := sheet.GetRow(i)
+		if err != nil {
+			continue
+		}
+		colAt := func(j int) string {
+			c, err := row.GetCol(j)
+			if err != nil {
+				return ""
+			}
+			return c.GetString()
+		}
+		id := colAt(2)
+		supplierID := colAt(7)
+		broj := colAt(1)
+		if id == "" && supplierID == "" {
+			continue
+		}
+		key := id + "-" + supplierID
+		ura[key] = broj
 	}
 
 	return ura, nil
