@@ -278,6 +278,7 @@ func writeInvoice(filename string, invoices []Invoice) error {
 			invoice.Broj,
 		}
 		if err := writer.Write(row); err != nil {
+			fmt.Println("writeInvoice", err, row)
 			return err
 		}
 	}
@@ -319,10 +320,10 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 			}
 			row := []string{
 				invoice.ID,
-				line.ID,
+				fixRune(line.ID),
 
-				line.ItemName,
-				line.ItemID,
+				fixRune(line.ItemName),
+				fixRune(line.ItemID),
 
 				formatNumber(line.Quantity.Value),
 				formatNumber(line.UnitPrice),
@@ -333,6 +334,7 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 				line.TaxID + "-" + line.TaxScheme,
 			}
 			if err := writer.Write(row); err != nil {
+				fmt.Println("writeInvoiceLines", err, row)
 				return err
 			}
 		}
@@ -361,8 +363,10 @@ func writeCustomer(filename string, invoices []Invoice) error {
 	encoder := charmap.Windows1250.NewEncoder()
 	transformedWriter := transform.NewWriter(file, encoder)
 	defer transformedWriter.Close()
-
 	writer := csv.NewWriter(transformedWriter)
+
+	//writer := csv.NewWriter(file)
+
 	writer.Comma = ';'
 	writer.UseCRLF = true
 	defer writer.Flush()
@@ -389,13 +393,14 @@ func writeCustomer(filename string, invoices []Invoice) error {
 
 				fixRune(customer.Street),
 				fixRune(customer.City),
-				customer.PostalZone,
-				customer.Country,
+				fixRune(customer.PostalZone),
+				fixRune(customer.Country),
 
-				customer.Contact,
-				customer.Email,
+				fixRune(customer.Contact),
+				fixRune(customer.Email),
 			}
 			if err := writer.Write(row); err != nil {
+				fmt.Println("writeCustomer", err, row)
 				return err
 			}
 		}
@@ -422,7 +427,7 @@ Char | Win-1250 | UTF-8 bytes
 func fixRune(s string) string {
 	var buf bytes.Buffer
 	var last rune = 0
-	//fixed := false
+	// fixed := false
 	for _, r := range s {
 		if r <= unicode.MaxASCII {
 			buf.WriteRune(r)
@@ -471,7 +476,7 @@ func fixRune(s string) string {
 				}
 				last = 0
 			}
-			//fixed = true
+			// fixed = true
 		}
 	}
 	// if fixed {
