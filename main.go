@@ -261,7 +261,7 @@ func writeInvoice(filename string, invoices []Invoice) error {
 	for _, invoice := range invoices {
 		// Invoice row
 		row := []string{
-			invoice.ID,
+			invoice.Supplier.ID + "-" + invoice.ID,
 			formatDate(invoice.IssueDate + " " + invoice.IssueTime),
 			formatDate(invoice.DueDate),
 			invoice.Supplier.ID,
@@ -313,7 +313,7 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 
 	for _, invoice := range invoices {
 		// Invoice lines
-
+		invoiceID := invoice.Supplier.ID + "-" + invoice.ID
 		for _, line := range invoice.Lines {
 			unit, ok := unitCodes[line.Quantity.UnitCode]
 			if !ok {
@@ -322,7 +322,7 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 			itemName := fixRune(line.ItemName)
 			itemName = strings.ReplaceAll(strings.Trim(strings.TrimRight(itemName, "\r"), "\n"), "\t", " ")
 			row := []string{
-				invoice.ID,
+				invoiceID,
 				fixRune(line.ID),
 
 				itemName,
@@ -349,7 +349,7 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 					if len(desc) > 0 && desc != itemName {
 						n += 1
 						row := []string{
-							invoice.ID,
+							invoiceID,
 							fixRune(line.ID) + fmt.Sprintf("%03d", n),
 
 							desc,
