@@ -61,8 +61,9 @@ type Customer struct {
 type InvoiceLine struct {
 	ID string `xml:"ID"` // redni broj
 
-	ItemName string `xml:"Item>Name"` // naziv artikla
-	ItemID   string `xml:"Item>SellersItemIdentification>ID"`
+	ItemName        string `xml:"Item>Name"`        // naziv artikla
+	ItemDescription string `xml:"Item>Description"` // opisi, vise linija
+	ItemID          string `xml:"Item>SellersItemIdentification>ID"`
 
 	Quantity  Quantity `xml:"InvoicedQuantity"`    // kolicina
 	UnitPrice string   `xml:"Price>PriceAmount"`   // neto cijena
@@ -318,11 +319,13 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 			if !ok {
 				unit = line.Quantity.UnitCode
 			}
+			itemName := fixRune(line.ItemName)
+			itemName = strings.ReplaceAll(strings.Trim(strings.TrimRight(itemName, "\r"), "\n"), "\t", " ")
 			row := []string{
 				invoice.ID,
 				fixRune(line.ID),
 
-				fixRune(line.ItemName),
+				itemName,
 				fixRune(line.ItemID),
 
 				formatNumber(line.Quantity.Value),
@@ -336,6 +339,36 @@ func writeInvoiceLines(filename string, invoices []Invoice) error {
 			if err := writer.Write(row); err != nil {
 				fmt.Println("writeInvoiceLines", err, row)
 				return err
+			}
+			description := fixRune(line.ItemDescription)
+			if len(description) > 0 {
+				n := 0
+				for desc := range strings.Lines(description) {
+					desc = strings.TrimLeft(strings.TrimRight(desc, "\r\n"), "\t")
+					desc = strings.ReplaceAll(strings.Trim(strings.TrimRight(desc, "\r"), "\n"), "\t", " ")
+					if len(desc) > 0 && desc != itemName {
+						n += 1
+						row := []string{
+							invoice.ID,
+							fixRune(line.ID) + fmt.Sprintf("%03d", n),
+
+							desc,
+							fixRune(line.ItemID),
+
+							"0",
+							"0",
+							"0",
+							"",
+
+							"0",
+							"",
+						}
+						if err := writer.Write(row); err != nil {
+							fmt.Println("writeInvoiceLines", err, row)
+							return err
+						}
+					}
+				}
 			}
 		}
 	}
@@ -453,6 +486,7 @@ func fixRune(s string) string {
 						case 0x2021:
 							buf.WriteRune('ć')
 						default:
+							//fmt.Println("fixRune 1", last, r)
 							buf.WriteRune('?')
 						}
 					}
@@ -468,10 +502,12 @@ func fixRune(s string) string {
 						case 0x2c7:
 							buf.WriteRune('š')
 						default:
+							//fmt.Println("fixRune 2", last, r)
 							buf.WriteRune('?')
 						}
 					}
 				default:
+					//fmt.Println("fixRune", last, r)
 					buf.WriteRune('?')
 				}
 				last = 0
@@ -568,14 +604,29 @@ func readUraXls(filename string) (map[string]string, error) {
 			}
 			return c.GetString()
 		}
+		broj := colAt(1)
 		id := colAt(2)
 		supplierID := colAt(7)
-		broj := colAt(1)
 		if id == "" && supplierID == "" {
 			continue
 		}
 		key := id + "-" + supplierID
 		ura[key] = broj
+
+		// dobio neki malo drugaciji format
+		// broj 1 -> 2,
+		// id 2 -> 4
+		// oib 7 -> 8
+		{
+			broj = colAt(2)
+			id = colAt(4)
+			supplierID = colAt(8)
+			if id == "" && supplierID == "" {
+				continue
+			}
+			key = id + "-" + supplierID
+			ura[key] = broj
+		}
 	}
 
 	return ura, nil
