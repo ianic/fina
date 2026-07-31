@@ -152,6 +152,7 @@ func main() {
 
 	files_count := 0
 	skip_count := 0
+	broj_match := 0
 	for _, path := range input {
 		err = filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -176,6 +177,9 @@ func main() {
 							fmt.Printf("preskacem %-70s nema broja racuna %s\n", filename, key)
 							skip_count += 1
 							return nil
+						} else {
+							//fmt.Printf("nasao broj %s => %s\n", filename, broj)
+							broj_match += 1
 						}
 						invoice.Broj = broj
 					}
@@ -194,7 +198,7 @@ func main() {
 	}
 
 	writeFiles(invoices)
-	fmt.Printf("pronasao %d datoteka, preskocio %d\n", files_count, skip_count)
+	fmt.Printf("pronasao %d datoteka, preskocio %d (upario ura brojeva: %d)\n", files_count, skip_count, broj_match)
 }
 
 func parse(xmlFile string) Invoice {
@@ -208,7 +212,7 @@ func parse(xmlFile string) Invoice {
 	var invoice Invoice
 	err = xml.Unmarshal(data, &invoice)
 	if err != nil {
-		log.Fatalf("Error parsing XML: %v", err)
+		log.Fatalf("Error parsing %s XML: %v", xmlFile, err)
 	}
 
 	return invoice
@@ -570,8 +574,8 @@ func readUraCsv(filename string) (map[string]string, error) {
 		if i == 0 {
 			continue
 		}
-		id := row[2]
-		supplierID := row[7]
+		id := row[4]
+		supplierID := row[2] // oib
 		broj := row[1]
 		key := id + "-" + supplierID
 		ura[key] = broj
@@ -592,7 +596,7 @@ func readUraXls(filename string) (map[string]string, error) {
 	}
 
 	ura := make(map[string]string)
-	for i := 1; i < sheet.GetNumberRows(); i++ {
+	for i := 0; i < sheet.GetNumberRows(); i++ {
 		row, err := sheet.GetRow(i)
 		if err != nil {
 			continue
@@ -605,8 +609,8 @@ func readUraXls(filename string) (map[string]string, error) {
 			return c.GetString()
 		}
 		broj := colAt(1)
-		id := colAt(2)
-		supplierID := colAt(7)
+		id := colAt(4)
+		supplierID := colAt(2)
 		if id == "" && supplierID == "" {
 			continue
 		}
@@ -618,9 +622,10 @@ func readUraXls(filename string) (map[string]string, error) {
 		// id 2 -> 4
 		// oib 7 -> 8
 		{
-			broj = colAt(2)
+			broj = colAt(6)
 			id = colAt(4)
-			supplierID = colAt(8)
+			supplierID = colAt(2)
+			// fmt.Println("key: ", id, supplierID, "=>", broj)
 			if id == "" && supplierID == "" {
 				continue
 			}
